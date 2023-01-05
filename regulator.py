@@ -23,7 +23,9 @@ from dank.DankEncoder import DankEncoder
 
 
 MEMO = {}
-LOGFILE_NAME = 'logs/regulator.log'
+LOGFILE_NAME = '/tmp/regulator.log'
+with open(LOGFILE_NAME, 'w') as f:
+  pass
 DNS_CHARS = string.ascii_lowercase + string.digits + '._-'
 
 
