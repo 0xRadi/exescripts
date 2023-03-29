@@ -1,16 +1,12 @@
-# Script to generate subdomains from preumtations
-# python3 main.py sample.com sample.domains sample.rules
-# python3 main.py sample.rules sample.brute -g true
-# puredns resolve sample.brute --write sample.new_domains -r resolvers.txt
-# 
+# python3 main.py -t <target.com> -f <hosts-file> -o <output-file>
+# python3 main.py -t adobe.com -f adobe.subs -o adobe.brute
+# puredns resolve adobe.brute --write adobe.valid
+# source: https://github.com/cramppet/regulator
 
 import re
 import string
 import logging
 import argparse
-
-import sys
-from dank.DankGenerator import DankGenerator
 
 from typing import List, Set
 from itertools import combinations_with_replacement
@@ -20,12 +16,11 @@ import tldextract
 import editdistance
 
 from dank.DankEncoder import DankEncoder
+from dank.DankGenerator import DankGenerator
 
 
 MEMO = {}
-LOGFILE_NAME = '/tmp/regulator.log'
-with open(LOGFILE_NAME, 'w') as f:
-  pass
+LOGFILE_NAME = 'logs/regulator.log'
 DNS_CHARS = string.ascii_lowercase + string.digits + '._-'
 
 
@@ -190,63 +185,32 @@ def is_good_rule(regex: str, nkeys: int, threshold: int, max_ratio: float) -> bo
   nwords = e.num_words(1,256)
   return nwords < threshold or (nwords/nkeys) < max_ratio
 
-def process_dank(input_file_path, output_file_path):
-  # Read all lines from the input file
-  with open(input_file_path, 'r') as input_file:
-    lines = input_file.readlines()
-
-  # Process each line with the DankGenerator
-  items = []
-  for line in lines:
-    for item in DankGenerator(line.strip()):
-      items.append(item.decode('utf-8'))
-
-  # Replace any sequences of two or more dots with a single dot
-  items = [item.replace('..', '.') for item in items]
-
-  # Sort the items and remove duplicates
-  items = sorted(set(items))
-
-  # Compile a regular expression to match common IP address formats
-  ip_pattern = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
-
-  # Remove items that match the specified pattern or contain an IP address
-  items = [item for item in items if not (item.startswith('._') or item.endswith('_.') or item.startswith('-.') or item.endswith('.-') or item.startswith('_-') or item.endswith('-_') or ip_pattern.search(item) is not None)]
-
-  # Write the processed items to the output file
-  with open(output_file_path, 'w') as output_file:
-    output_file.writelines([f"{item}\n" for item in items])
-
-parser = argparse.ArgumentParser(description='DNS Regulator')
-parser.add_argument('-t', '--threshold', required=False, type=int, default=500, help='threshold to start performing ratio test')
-parser.add_argument('-mr', '--max-ratio', required=False, type=float, default=25.0, help='ratio test parameter R: len(Synth)/len(Obs) < R')
-parser.add_argument('-ml', '--max-length', required=False, type=int, default=1000, help='maximum rule length for global search')
-parser.add_argument('-dl', '--dist-low', required=False, type=int, default=2, help='lower bound on string edit distance range')
-parser.add_argument('-dh', '--dist-high', required=False, type=int, default=10, help='upper bound on string edit distance range')
-parser.add_argument('-g', '--generator', action="store_true", help='do you want to generate domains?')
-# parser.add_argument('-i', '--input', action="store_true", help='generator input')
-# parser.add_argument('-o', '--ouput', action="store_true", help='generator output')
-parser.add_argument('domain', help='the domain to target', default="test.com")
-parser.add_argument('hosts', help='the observed hosts file', default="test.com")
-parser.add_argument('output', help='output filename', default="test.com")
-args = vars(parser.parse_args())
-
-
-
+def sort_and_unique(file_name: str):
+  with open(file_name, "r") as file:
+    data = file.readlines()
+    data = sorted(set(data))
+  with open(file_name, "w") as file:
+    file.writelines(data)
 
 def main():
   global DNS_CHARS, MEMO
 
   logging.basicConfig(format='%(asctime)-15s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, filename=LOGFILE_NAME, filemode='a')
-
+  parser = argparse.ArgumentParser(description='DNS Regulator')
+  parser.add_argument('-th', '--threshold', required=False, type=int, default=500, help='Threshold to start performing ratio test')
+  parser.add_argument('-mr', '--max-ratio', required=False, type=float, default=25.0, help='Ratio test parameter R: len(Synth)/len(Obs) < R')
+  parser.add_argument('-ml', '--max-length', required=False, type=int, default=1000, help='Maximum rule length for global search')
+  parser.add_argument('-dl', '--dist-low', required=False, type=int, default=2, help='Lower bound on string edit distance range')
+  parser.add_argument('-dh', '--dist-high', required=False, type=int, default=10, help='Upper bound on string edit distance range')
+  parser.add_argument('-t', '--target', required=True, type=str, help='The domain to target')
+  parser.add_argument('-f', '--hosts', required=True, type=str, help='The observed hosts file')
+  parser.add_argument('-o', '--output', required=False, type=str, help='Output filename (default: output)', default="output")
+  args = vars(parser.parse_args())
 
   logging.info(f'REGULATOR starting: MAX_RATIO={args["max_ratio"]}, THRESHOLD={args["threshold"]}')
 
   trie = datrie.Trie(DNS_CHARS)
   known_hosts, new_rules = set([]), set([])
-
-
-
 
   def first_token(item: str):
     tokens = tokenize([item])
@@ -255,7 +219,7 @@ def main():
   with open(args['hosts'], 'r') as handle:
     known_hosts = sorted(list(set([line.strip() for line in handle.readlines()])))
     for host in known_hosts:
-      if host != args['domain']:
+      if host != args['target']:
         tokens = tokenize([host])
         if len(tokens) > 0 and len(tokens[0]) > 0 and len(tokens[0][0]) > 0:
           trie[host] = True
@@ -277,7 +241,7 @@ def main():
     closures = edit_closures(known_hosts, delta=k)
     for closure in closures:
       if len(closure) > 1:
-        r = closure_to_regex(args['domain'], closure)
+        r = closure_to_regex(args['target'], closure)
         # This is probably the only place you'd want to apply this check; rules
         # inferred using this method tend to be very big which makes this part
         # slow, especially at scale.
@@ -297,7 +261,7 @@ def main():
       continue
 
     # First chance: try ngrams first because they are the shortest
-    r = closure_to_regex(args['domain'], keys)
+    r = closure_to_regex(args['target'], keys)
     if r not in new_rules and is_good_rule(r, len(keys), args['threshold'], args['max_ratio']):
       new_rules.add(r)
       
@@ -307,7 +271,7 @@ def main():
       keys = trie.keys(prefix)
 
       # Second chance: use prefix tokens starting with the ngram
-      r = closure_to_regex(args['domain'], keys)
+      r = closure_to_regex(args['target'], keys)
       if r not in new_rules and is_good_rule(r, len(keys), args['threshold'], args['max_ratio']):
         if last is None or not prefix.startswith(last):
           last = prefix
@@ -321,7 +285,7 @@ def main():
           closures = edit_closures(keys, delta=k)
           for closure in closures:
             # Third chance: deconstruct prefix using edit distance
-            r = closure_to_regex(args['domain'], closure)
+            r = closure_to_regex(args['target'], closure)
             if r not in new_rules and is_good_rule(r, len(closure), args['threshold'], args['max_ratio']):
               new_rules.add(r)
 
@@ -329,14 +293,26 @@ def main():
             elif r not in new_rules:
               logging.error(f'Rule cannot be processed: {r}')
 
-  with open(args['output'], 'w') as handle:
+  #Saving rules with a static name
+  with open(f"{args['target']}.rules", 'w') as handle:
     for rule in new_rules:
       handle.write(f'{rule}\n')
 
+  with open(args['output'], 'w') as handle:
+    for line in new_rules:
+      for item in DankGenerator(line.strip()):
+        handle.write(item.decode('utf-8')+'\n')
+
+  #Sorting and uniquifying files(So we can handle a smaller number of hosts)
+  sort_and_unique(args['output'])
+
+  #Replacing incorrect/malformed subdomains (e.g. test..example.com)
+  with open(args['output'], 'r+') as handle:
+    #Sorting and uniquifying is required since for example before replacing test..example.com, test.example.com could have existed 
+    replaced = sorted(set(map(lambda line: re.sub('\.{2,}', '.', line) ,handle.readlines())))
+  with open(args['output'], 'w') as handle:
+    handle.writelines(replaced)
+    
 
 if __name__ == '__main__':
-    if args['generator']:
-      process_dank(sys.argv[1], sys.argv[2])
-    else:
-      main()
-  
+  main()
